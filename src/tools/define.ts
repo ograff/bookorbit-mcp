@@ -107,6 +107,15 @@ export function registerActionTool(
       const def = spec.actions[input.action]!;
       try {
         if (def.destructive) {
+          // The kill switch refuses before any summary work (which may call the API).
+          if (!ctx.enableDestructive) {
+            return gateDestructive({
+              enabled: false,
+              confirm: input.confirm,
+              action: `${spec.name}.${input.action}`,
+              summary: null,
+            })!;
+          }
           const summary = def.summarize ? await def.summarize(input as any, ctx) : input;
           const blocked = gateDestructive({
             enabled: ctx.enableDestructive,
