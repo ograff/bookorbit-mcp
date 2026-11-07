@@ -93,7 +93,12 @@ export class BookOrbitClient {
   async sse<T>(
     path: string,
     query?: Query,
-    opts: { timeoutMs?: number; maxEvents?: number } = {},
+    opts: {
+      timeoutMs?: number;
+      maxEvents?: number;
+      method?: string;
+      body?: unknown;
+    } = {},
   ): Promise<T[]> {
     const timeoutMs = opts.timeoutMs ?? 25_000;
     const maxEvents = opts.maxEvents ?? 200;
@@ -102,9 +107,9 @@ export class BookOrbitClient {
     const out: T[] = [];
     try {
       const res = await this.execute(
-        "GET",
+        opts.method ?? "GET",
         path,
-        { query },
+        { query, body: opts.body },
         "text/event-stream",
         ctrl.signal,
       );
