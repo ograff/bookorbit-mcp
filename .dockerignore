@@ -1,0 +1,13 @@
+node_modules
+dist
+.git
+.github
+.env
+*.log
+test
+docs
+deploy
+vendor/bookorbit/packages/types/dist
+vendor/bookorbit/packages/types/node_modules
+vendor/bookorbit/client
+vendor/bookorbit/server
