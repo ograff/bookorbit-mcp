@@ -1,0 +1,20 @@
+---
+# Exposed through the same Cloudflare tunnel/Envoy path as the other MCP
+# servers. Authentication is a self-hosted Cloudflare Access app for this
+# hostname, configured in Cloudflare (outside git) -- see
+# https://github.com/ograff/bookorbit-mcp#cloudflare-access. The server also
+# verifies the Access JWT itself.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: bookorbit-mcp
+spec:
+  hostnames: ["bookorbit-mcp.${SECRET_DOMAIN}"]
+  parentRefs:
+    - name: envoy-external
+      namespace: network
+      sectionName: https
+  rules:
+    - backendRefs:
+        - name: bookorbit-mcp
+          port: 8080

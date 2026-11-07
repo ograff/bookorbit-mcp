@@ -1,0 +1,15 @@
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: OCIRepository
+metadata:
+  name: bookorbit-mcp
+spec:
+  interval: 15m
+  layerSelector:
+    mediaType: application/vnd.cncf.helm.chart.content.v1.tar+gzip
+    operation: copy
+  ref:
+    tag: 5.2.1
+  # ghcr.io/ograff/bookorbit-mcp ships a plain Docker image, not a Helm chart
+  # -- same bjw-s app-template pattern as ha-mcp.
+  url: oci://ghcr.io/bjw-s-labs/helm/app-template

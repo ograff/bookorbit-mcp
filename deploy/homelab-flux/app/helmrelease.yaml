@@ -1,0 +1,78 @@
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: &app bookorbit-mcp
+spec:
+  chartRef:
+    kind: OCIRepository
+    name: *app
+  interval: 1h
+  values:
+    controllers:
+      bookorbit-mcp:
+        annotations:
+          # Credentials and Access settings come from bookorbit-mcp-secret via
+          # envFrom, read once at start -- without this a sops edit never
+          # reaches a running pod.
+          reloader.stakater.com/auto: "true"
+
+        containers:
+          app:
+            image:
+              repository: ghcr.io/ograff/bookorbit-mcp
+              tag: sha-REPLACE_ME
+            env:
+              PORT: &port "8080"
+              # The BookOrbit Service (books ns), bypassing Cloudflare Access.
+              BOOKORBIT_URL: http://bookorbit.books.svc.cluster.local:3000
+              # Defense in depth: the server re-verifies Cloudflare's signed
+              # Cf-Access-Jwt-Assertion header (JWKS + AUD). NetworkPolicy
+              # isn't enforced by flannel here, so this is also what stops
+              # another pod from calling the Service directly.
+              REQUIRE_CF_ACCESS: "true"
+              # false = read-only deploy: every delete/reject/cancel/finalize
+              # style action is refused even with confirm: true.
+              ENABLE_DESTRUCTIVE: "true"
+            envFrom:
+              # BOOKORBIT_USERNAME, BOOKORBIT_PASSWORD, CF_ACCESS_TEAM_DOMAIN,
+              # CF_ACCESS_AUD
+              - secretRef:
+                  name: bookorbit-mcp-secret
+            probes:
+              liveness: &probes
+                enabled: true
+                custom: true
+                spec:
+                  httpGet:
+                    path: /healthz
+                    port: 8080
+                  initialDelaySeconds: 5
+                  periodSeconds: 20
+                  timeoutSeconds: 3
+                  failureThreshold: 3
+              readiness: *probes
+            securityContext:
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: true
+              capabilities: { drop: ["ALL"] }
+            resources:
+              requests:
+                cpu: 10m
+                memory: 96Mi
+              limits:
+                memory: 256Mi
+
+    defaultPodOptions:
+      securityContext:
+        runAsNonRoot: true
+        # `node` user (uid/gid 1000) in the node:22-alpine image.
+        runAsUser: 1000
+        runAsGroup: 1000
+
+    service:
+      app:
+        controller: bookorbit-mcp
+        ports:
+          http:
+            port: *port

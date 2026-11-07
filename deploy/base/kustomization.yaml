@@ -1,0 +1,13 @@
+---
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# Generic base. Set the namespace in your overlay. Ingress and the Secret are
+# environment-specific, so they are not included (see secret.example.yaml and
+# the README). The Flux/app-template variant for this homelab is in
+# ../homelab-flux.
+resources:
+  - ./deployment.yaml
+  - ./service.yaml
+images:
+  - name: ghcr.io/ograff/bookorbit-mcp
+    newTag: latest # pin to a sha-<short> or semver tag in your overlay

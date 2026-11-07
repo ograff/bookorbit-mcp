@@ -1,0 +1,45 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bookorbit-mcp
+  labels: { app.kubernetes.io/name: bookorbit-mcp }
+spec:
+  replicas: 1 # stateless; the BookOrbit client re-authenticates per process
+  selector:
+    matchLabels: { app.kubernetes.io/name: bookorbit-mcp }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: bookorbit-mcp }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: app
+          image: ghcr.io/ograff/bookorbit-mcp
+          ports:
+            - { name: http, containerPort: 8080 }
+          env:
+            - { name: PORT, value: "8080" }
+            - { name: BOOKORBIT_URL, value: http://bookorbit:3000 } # in-cluster Service
+            - { name: REQUIRE_CF_ACCESS, value: "true" }
+            - { name: ENABLE_DESTRUCTIVE, value: "true" }
+          envFrom:
+            - secretRef: { name: bookorbit-mcp-secret } # see secret.example.yaml
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 10m, memory: 96Mi }
+            limits: { memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }

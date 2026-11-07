@@ -1,165 +1,146 @@
 # bookorbit-mcp
 
-An [MCP](https://modelcontextprotocol.io) server that exposes the **text of your
-ebooks** — managed by [BookOrbit](https://github.com/bookorbit/bookorbit) — to
-LLMs, so an assistant can answer questions about _what happens inside a book_
-without you copy-pasting chapters.
+A remote [MCP](https://modelcontextprotocol.io) server that lets Claude manage a self-hosted
+[BookOrbit](https://github.com/bookorbit/bookorbit) instance: library management, book requests,
+Book Dock imports, metadata, and read-along generation. It runs next to BookOrbit and talks to it
+over the in-cluster Service; Claude reaches it as a custom connector behind Cloudflare Access.
 
-It is deliberately **navigation-first**: instead of dumping a whole 100k-word
-book into the model's context (which would overwhelm it), the server lets the
-model find a book, look at its chapter list, and pull only the pieces it needs.
+```
+claude.ai connector ── Cloudflare Access ──▶ https://bookorbit-mcp.<domain>/mcp
+                                                 │ cloudflared tunnel → Envoy
+                                                 ▼
+                                        bookorbit-mcp pod (Node 22, Streamable HTTP)
+                                                 │ in-cluster HTTP (no Access)
+                                                 ▼
+                                        bookorbit Service :3000 /api/v1
+```
 
-## How it works
-
-BookOrbit stores raw EPUB files and exposes a reader backend
-(`/epub/{bookId}/info` + `/epub/{bookId}/file/{path}`). This server uses that
-backend to read a book's structure, fetch only the needed chapters, strip the
-XHTML to plain text, and cache the result on disk. Nothing is re-downloaded
-after the first read.
-
-Three guardrails keep the model from drowning:
-
-1. **Structure before text** — `list_chapters` returns chapter labels and sizes,
-   never the body.
-2. **Bounded, paginated text** — `get_chapter` caps output (~24k chars) and pages
-   through long chapters with `offset` / `nextOffset`.
-3. **Snippet-only search** — `search_in_book` returns short snippets plus a
-   chapter index + offset the model can re-fetch precisely.
+License: AGPL-3.0-only (it builds against BookOrbit's AGPL `@bookorbit/types`). See `NOTICE`.
+Portions derive from [joshstrange/bookorbit-mcp](https://github.com/joshstrange/bookorbit-mcp) (MIT,
+`LICENSE-MIT-upstream`).
 
 ## Tools
 
-All tools are **read-only**.
+Action tools take an `action` plus that action's fields (and `confirm`).
 
-**Find & read book text**
+| Tool                                                              | What it does                                                                                                       |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `search_books`, `get_book`, `browse`                              | Find books; full detail (files, locks); series / authors / libraries / collections / smart scopes                  |
+| `manage_book`                                                     | Edit metadata, set read status, delete books                                                                       |
+| `manage_collection`, `manage_library`, `move_books`, `duplicates` | Collections; library stats and rescan; move books between libraries (preview first); duplicate scans               |
+| `book_dock`                                                       | Review staged imports, edit/refetch metadata, set targets, preview and finalize, discard                           |
+| `requests`, `requests_admin`                                      | Create / track / cancel requests; approve, reject, search releases, grab, fulfill                                  |
+| `fill_series_gaps`                                                | Find missing volumes of a series, resolve titles through metadata providers, and request them (dry run by default) |
+| `metadata_lookup`, `book_metadata`, `metadata_bulk`               | Provider search; apply chosen fields, lock/unlock, custom fields; bulk fetch runs                                  |
+| `read_aloud`, `tts`                                               | Align an existing audiobook to its EPUB (read-along, **not** TTS); TTS voices and preferences                      |
 
-| Tool                                                         | What it does                                                                             |
-| ------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
-| `search_books(query, limit?)`                                | Find books by title/author/series; returns `bookId` + formats + `hasEpub`.               |
-| `get_book(bookId)`                                           | Full metadata (description, series, genres, files).                                      |
-| `list_chapters(bookId)`                                      | Chapter list with per-chapter char/word counts (no text). Parses + caches on first call. |
-| `get_chapter(bookId, chapter, offset?, maxChars?)`           | Plain text of one chapter, paginated.                                                    |
-| `search_in_book(bookId, query, maxResults?, caseSensitive?)` | Keyword search within a book → snippets + locations.                                     |
+### Safety model
 
-**Discovery & browse**
-
-| Tool                                                                    | What it does                                                                                                       |
-| ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `get_related_books(bookId, kind)`                                       | `similar` / `same_series` / `same_author` books for a book.                                                        |
-| `list_series(page?, size?)`                                             | Library's series with book/read counts.                                                                            |
-| `get_series_books(seriesId, page?, size?)`                              | Books in a series, in order.                                                                                       |
-| `list_authors(page?, size?)`                                            | Library's authors with book counts.                                                                                |
-| `get_author(authorId)`                                                  | One author, including their bio.                                                                                   |
-| `get_author_books(authorId, page?, size?)`                              | Books by an author.                                                                                                |
-| `list_collections()` / `get_collection(id)` / `get_collection_books(…)` | User collections, one collection's detail, and its books.                                                          |
-| `list_smart_scopes()` / `get_smart_scope_books(…)`                      | Saved dynamic filters and the books they match.                                                                    |
-| `list_libraries()`                                                      | Libraries with per-library book/size/format stats.                                                                 |
-| `suggest_metadata(kind, q)`                                             | Typeahead over authors/series/genres/tags/publishers/languages/narrators/collections — resolve an exact name.      |
-| `get_book_shelf(type, limit?)`                                          | A curated shelf: recently-added, want-to-read, up-next-in-series, continue-reading/listening, random, smart-scope. |
-| `search_author_metadata(q, …)`                                          | External provider author-bio candidates (enrichment, not your library).                                            |
-
-**Reading state & stats**
-
-| Tool                                       | What it does                                                                                            |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
-| `get_reading_progress(bookId)`             | Per-file progress (+ audiobook progress) for a book.                                                    |
-| `list_currently_reading()`                 | Books you're reading now, with progress.                                                                |
-| `get_reading_sessions(bookId, page?, …)`   | Reading-session history + aggregate stats for a book.                                                   |
-| `get_library_stats()`                      | Library-wide totals (books/authors/series/storage/…).                                                   |
-| `get_reading_stats()`                      | Your personal reading totals (started/completed/…).                                                     |
-| `get_library_statistic(kind, libraryIds?)` | One library-wide chart: distributions, top-authors/series, timelines, metadata-health gauges.           |
-| `get_reading_statistic(kind, days?, …)`    | One personal reading chart: peak-hours, favorite-days, heatmap, completion-latency, goal-trajectory, …  |
-| `get_dashboard_widget(kind)`               | One "headline card": reading-streak, reading-goal, year-projection, neglected-gems, library-overview, … |
-
-**Annotations** (your own highlights & notes)
-
-| Tool                                          | What it does                                        |
-| --------------------------------------------- | --------------------------------------------------- |
-| `list_annotations(page?, pageSize?, bookId?)` | All highlights/notes across the library, paginated. |
-| `list_annotated_books()`                      | Which books have annotations, with counts.          |
-| `get_annotations(bookId)`                     | One book's highlights/notes, in chapter order.      |
-
-**Images** (returned as image content, not text)
-
-| Tool                                | What it does                                  |
-| ----------------------------------- | --------------------------------------------- |
-| `get_book_cover(bookId, size?)`     | A book's cover image (`full` or `thumbnail`). |
-| `get_author_image(authorId, size?)` | An author's photo (`full` or `thumbnail`).    |
-
-**Typical flow:** `search_books` → `list_chapters` → `get_chapter` /
-`search_in_book`.
-
-## Requirements & scope
-
-- **EPUB only** (v1). Books without an EPUB file return a clear error from the
-  text tools.
-- **Auth:** BookOrbit access tokens expire after ~15 minutes and there is no
-  long-lived API key, so the server logs in with your **username + password** and
-  refreshes / re-logs in automatically. A static `BOOKORBIT_TOKEN` is supported
-  for quick tests but will not auto-refresh.
-- Single-user / local: it acts as the account you configure.
+- **Destructive actions need `confirm: true`.** Without it they return a dry-run summary and change
+  nothing (delete books, reject/cancel requests, finalize/discard Book Dock files, execute a move,
+  cancel the bulk metadata queue, delete a read-aloud job, …).
+- **`ENABLE_DESTRUCTIVE=false`** refuses all of them even with `confirm: true` (read-only-ish deploy).
+- Book deletion and discard take **explicit ids only** (max 50 / 100); BookOrbit's "everything
+  matching this query" selection is deliberately not exposed for them.
+- `fill_series_gaps` defaults to `dryRun: true`; low-confidence or ambiguous matches are never
+  requested automatically; `scope: "library"` only summarizes and never creates requests.
+- Responses are trimmed; covers and files are never returned.
 
 ## Configuration
 
-Set these as environment variables (or in a local `.env` — see `.env.example`):
+| Env                                        | Default  | Notes                                                                                    |
+| ------------------------------------------ | -------- | ---------------------------------------------------------------------------------------- |
+| `BOOKORBIT_URL`                            | required | In-cluster URL, e.g. `http://bookorbit.books.svc.cluster.local:3000`                     |
+| `BOOKORBIT_USERNAME`, `BOOKORBIT_PASSWORD` | required | Dedicated BookOrbit user (local password login)                                          |
+| `REQUIRE_CF_ACCESS`                        | `true`   | Verify `Cf-Access-Jwt-Assertion` on every request except `/healthz`                      |
+| `CF_ACCESS_TEAM_DOMAIN`, `CF_ACCESS_AUD`   | —        | Required when Access is on. `<team>` or `<team>.cloudflareaccess.com`; the app's AUD tag |
+| `ENABLE_DESTRUCTIVE`                       | `true`   | `false` refuses every destructive action                                                 |
+| `PORT`                                     | `8080`   |                                                                                          |
 
-| Variable             | Required    | Notes                                                               |
-| -------------------- | ----------- | ------------------------------------------------------------------- |
-| `BOOKORBIT_URL`      | yes         | Base URL, e.g. `https://bookorbit.example.com` (trailing slash ok). |
-| `BOOKORBIT_USERNAME` | recommended | Enables automatic token refresh.                                    |
-| `BOOKORBIT_PASSWORD` | recommended |                                                                     |
-| `BOOKORBIT_TOKEN`    | alternative | Static Bearer token; dev/testing only (expires ~15 min).            |
-| `CACHE_DIR`          | optional    | Where extracted text is cached (default `~/.cache/bookorbit-mcp`).  |
+The server is stateless (a fresh MCP server per request) and logs in to BookOrbit as a `native`
+client: the refresh token travels in the JSON body and is rotated on every refresh. On a 401 it
+refreshes once and then logs in again.
 
-## Install & build
+### BookOrbit user permissions
 
-```bash
-npm install
-npm run build
-```
+Create a dedicated user (don't reuse yours). Grant only what you want Claude to be able to do:
 
-## Use with a Claude client
+| Capability                                          | Permission(s)                                                                                   |
+| --------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| Browse / search / read                              | (library access to the libraries it should see)                                                 |
+| `requests`                                          | `book_request_access`                                                                           |
+| `requests_admin`                                    | `manage_book_requests`                                                                          |
+| `manage_book` update, `move_books`, `book_metadata` | `library_edit_metadata`                                                                         |
+| `manage_book` delete, `duplicates`                  | `library_delete_books`                                                                          |
+| `manage_library` scan / stats                       | `manage_libraries`                                                                              |
+| `book_dock`                                         | `book_dock_access` (+ `manage_book_dock` for pause/resume/rescan, `library_upload` to finalize) |
+| `metadata_bulk`                                     | `manage_metadata_config`                                                                        |
+| `read_aloud`                                        | `library_generate_read_aloud`                                                                   |
 
-Add to your MCP client config (e.g. Claude Desktop's `claude_desktop_config.json`,
-or `claude mcp add`). Point at the built entry and pass your credentials:
+A missing permission surfaces as a 403 naming the endpoint. A superuser also works but defeats the
+point of a scoped account. For a read-only deploy, grant none of the write permissions.
 
-```json
-{
-  "mcpServers": {
-    "bookorbit": {
-      "command": "node",
-      "args": ["/absolute/path/to/bookorbit-mcp/dist/server.js"],
-      "env": {
-        "BOOKORBIT_URL": "https://bookorbit.example.com",
-        "BOOKORBIT_USERNAME": "your-username",
-        "BOOKORBIT_PASSWORD": "your-password"
-      }
-    }
-  }
-}
-```
+## Cloudflare Access
+
+Authentication is a self-hosted Access application on the MCP hostname; the server additionally
+verifies Cloudflare's signed JWT (defense in depth, and it protects the Service from other pods,
+since flannel does not enforce NetworkPolicy).
+
+1. Tunnel/route: publish `bookorbit-mcp.<domain>` to the cluster (in this homelab: an `HTTPRoute`
+   on `envoy-external`, see `deploy/homelab-flux`).
+2. Zero Trust → Access → Applications → **Add application → Self-hosted** for that hostname, with a
+   policy allowing your identity. Give it its own app so it is not under a wildcard policy.
+3. Pick one auth mode:
+   - **Managed OAuth** (what this was designed for): enable _Managed OAuth_ on the app with dynamic
+     client registration, so claude.ai registers itself. Check Cloudflare's current docs for the
+     exact steps; the feature is still evolving.
+   - **Service Auth + header token** (what `k8s-mcp` uses in this cluster): a Service Auth policy
+     with `read_service_tokens_from_header: x-auth-token`, and the connector sends the token JSON in
+     that header. The JWT check works the same with either mode.
+4. Copy the app's **Application Audience (AUD) tag** into `CF_ACCESS_AUD`, and your team name into
+   `CF_ACCESS_TEAM_DOMAIN`.
+5. Verify: `curl https://bookorbit-mcp.<domain>/.well-known/oauth-authorization-server` returns the
+   issuer and endpoints (Managed OAuth), and an unauthenticated `POST /mcp` is refused.
+6. claude.ai → Settings → Connectors → **Add custom connector** →
+   `https://bookorbit-mcp.<domain>/mcp`.
+
+If requests are rejected with `unauthorized`, the pod log says why (`auth rejected …: <reason>`).
+First thing to confirm for a new Access mode: that Access forwards `Cf-Access-Jwt-Assertion` to the
+origin for that mode.
+
+## Deploying
+
+The image is published to `ghcr.io/ograff/bookorbit-mcp` by CI (tags `sha-<short>`, `latest` on
+main, semver on `v*` tags). **The GHCR package must be public**, or the cluster needs an
+`imagePullSecret`.
+
+- `deploy/base`: generic Kustomize base (Deployment + Service; Secret and ingress are yours).
+- `deploy/homelab-flux`: the Flux/app-template variant in this homelab's conventions. Copy it to
+  `kubernetes/apps/mcp/bookorbit-mcp`, register it in `kubernetes/apps/mcp/kustomization.yaml`,
+  create `secret.sops.yaml` from `secret.example.yaml`, and set the image tag.
 
 ## Development
 
 ```bash
-npm test          # unit tests (offline; run against captured fixtures)
-npm run typecheck # type-check only
-npm run dev       # run the server from source over stdio
-
-# Live checks against a real server (need .env with credentials):
-node --import tsx scripts/smoke.mts      # exercises search → parse → chapter → search
-node --import tsx scripts/mcp-check.mts   # drives the built server over the MCP stdio protocol
+npm install
+npm run setup:types   # fetch the pinned BookOrbit submodule (types only) and build @bookorbit/types
+npm test              # offline, mocked BookOrbit
+npm run dev           # stdio server (Claude Code / local), reads BOOKORBIT_* from the env
+npm run dev:http      # HTTP server; set REQUIRE_CF_ACCESS=false locally
 ```
 
-## Design notes
+`@bookorbit/types` is vendored as a sparse git submodule (`vendor/bookorbit`) **pinned to the tag
+matching the deployed BookOrbit version** (currently `v3.6.0`), so upstream API changes surface as
+compile errors when the pin is bumped: update the submodule, run `npm run setup:types`, then
+`npm run typecheck && npm test`.
 
-- **Chapters follow the TOC, not raw files.** A single EPUB spine file can bundle
-  many chapters separated by `#fragment` anchors; the server resolves the table
-  of contents into meaningful sections and slices each one by its anchor range.
-- **Cache layout:** `~/.cache/bookorbit-mcp/<bookId>/book.json` (chapter list +
-  sizes) and `text/section-NNN.txt` (extracted text per chapter).
-- **Discovery, reading-state, stats, and annotation tools are live passthroughs**
-  to BookOrbit and are **not cached** (that data is mutable); only extracted EPUB
-  text is cached.
-- **Not included (v1):** semantic/RAG search, cross-library content search,
-  PDF/MOBI, and any write operations. The cache layout leaves room to add a
-  cross-book index later.
+CI (`.github/workflows/ci.yml`): format → lint → typecheck → test → build, then the image.
+
+Tests run against a mocked BookOrbit built from reading the upstream controllers/DTOs. Treat the
+first run against a real instance as the real integration test, and try destructive actions only
+against a throwaway library.
+
+### Optional: EPUB text tools
+
+The fork's chapter-text modules (`src/reading/`) are kept for a future opt-in `reading` module
+(`list_chapters` / `get_chapter` / `search_in_book`); they are not registered yet.

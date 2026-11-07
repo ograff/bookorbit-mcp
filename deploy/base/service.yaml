@@ -1,0 +1,9 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bookorbit-mcp
+spec:
+  selector: { app.kubernetes.io/name: bookorbit-mcp }
+  ports:
+    - { name: http, port: 8080, targetPort: http }
