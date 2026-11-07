@@ -13,6 +13,12 @@ const pq = (i: { page?: number; size?: number }) => ({
   size: i.size ?? 25,
 });
 
+/** BookOrbit returns read status as `{status, source, startedAt, …}`; keep just the status. */
+export function flatStatus(rs: unknown): { readStatus?: string } {
+  const status = typeof rs === "string" ? rs : (rs as { status?: string } | null)?.status;
+  return status ? { readStatus: status } : {};
+}
+
 /** A compact book row, tolerant of both the card and the search-result shapes. */
 export function shapeBook(
   b: Partial<BookCard> & { libraryName?: string; formats?: (string | null)[] },
@@ -27,15 +33,8 @@ export function shapeBook(
     ),
   ];
   return {
-    ...pick(b, [
-      "id",
-      "title",
-      "seriesId",
-      "seriesName",
-      "libraryId",
-      "libraryName",
-      "readStatus",
-    ]),
+    ...pick(b, ["id", "title", "seriesId", "seriesName", "libraryId", "libraryName"]),
+    ...flatStatus(b.readStatus),
     ...(b.authors?.length ? { authors: b.authors } : {}),
     ...(b.seriesIndex != null ? { seriesIndex: b.seriesIndex } : {}),
     ...(formats.length ? { formats } : {}),
@@ -61,10 +60,10 @@ export function shapeBookDetail(b: BookDetail) {
       "isbn10",
       "isbn13",
       "rating",
-      "readStatus",
       "metadataScore",
       "lockedFields",
     ]),
+    ...flatStatus(b.readStatus),
     description: b.description?.slice(0, 1000),
     authors: b.authors?.map((a) => ({ id: a.id, name: a.name })),
     genres: b.genres,

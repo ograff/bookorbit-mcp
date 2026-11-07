@@ -2,7 +2,10 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { errorMessage } from "./errors.js";
 
 export function ok(data: unknown): CallToolResult {
-  return { content: [{ type: "text", text: JSON.stringify(data, null, 1) }] };
+  // Empty API responses (204) must still produce a valid text block.
+  return {
+    content: [{ type: "text", text: JSON.stringify(data ?? { ok: true }, null, 1) }],
+  };
 }
 
 export function fail(err: unknown): CallToolResult {

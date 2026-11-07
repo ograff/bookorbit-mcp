@@ -14,6 +14,7 @@ import {
   type SeriesContext,
 } from "../series-gaps/plan.js";
 import { fail, ok } from "../util/format.js";
+import { submitWithDestination } from "./destination.js";
 
 interface SeriesPage {
   items: { seriesIndex?: string | number | null }[];
@@ -270,10 +271,13 @@ export function registerSeriesGapTools(server: McpServer, ctx: ToolContext) {
         const results: unknown[] = [];
         for (const call of calls) {
           try {
-            const res = await client.post<any>(
-              call.kind === "pair" ? "/book-requests/pairs" : "/book-requests",
-              call.body,
-            );
+            const res = await submitWithDestination(client, (defaults) => {
+              const body = applyDefaults(call.body, call, defaults);
+              return client.post<any>(
+                call.kind === "pair" ? "/book-requests/pairs" : "/book-requests",
+                body,
+              );
+            });
             results.push(
               call.kind === "pair"
                 ? {
@@ -304,4 +308,28 @@ export function registerSeriesGapTools(server: McpServer, ctx: ToolContext) {
       }
     },
   );
+}
+
+/** Fill in BookOrbit's default destination where the plan didn't name a target library. */
+function applyDefaults(
+  body: Record<string, unknown>,
+  call: { kind: "single" | "pair"; mediaKind?: MediaKind },
+  defaults?: Record<MediaKind, { libraryId: number | null; folderId: number | null }>,
+): Record<string, unknown> {
+  if (!defaults) return body;
+  const dest = (kind: MediaKind) =>
+    defaults[kind].libraryId
+      ? {
+          targetLibraryId: defaults[kind].libraryId,
+          ...(defaults[kind].folderId ? { targetFolderId: defaults[kind].folderId } : {}),
+        }
+      : {};
+  if (call.kind === "pair") {
+    const half = (kind: MediaKind) => {
+      const existing = (body[kind] ?? {}) as Record<string, unknown>;
+      return existing.targetLibraryId ? existing : { ...existing, ...dest(kind) };
+    };
+    return { ...body, ebook: half("ebook"), audiobook: half("audiobook") };
+  }
+  return body.targetLibraryId ? body : { ...body, ...dest(call.mediaKind!) };
 }

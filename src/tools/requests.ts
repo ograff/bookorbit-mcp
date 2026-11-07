@@ -10,6 +10,7 @@ import type {
 } from "@bookorbit/types";
 import { registerActionTool, type ToolContext } from "./define.js";
 import { ok, pick } from "../util/format.js";
+import { submitWithDestination } from "./destination.js";
 
 const MEDIA = z.enum(["ebook", "audiobook"]);
 const STATUS = z.enum([
@@ -175,10 +176,21 @@ export function registerRequestTools(server: McpServer, ctx: ToolContext) {
         },
         run: async (i, { client }) => {
           const { action: _a, confirm: _c, ...body } = i as any;
-          const res = await client.post<BookRequestSubmitResult>(
-            "/book-requests",
-            stripUndef(body),
-          );
+          const res = await submitWithDestination(client, (defaults) => {
+            const dest = defaults?.[body.mediaKind as "ebook" | "audiobook"];
+            const withDest =
+              body.targetLibraryId || !dest?.libraryId
+                ? body
+                : {
+                    ...body,
+                    targetLibraryId: dest.libraryId,
+                    ...(dest.folderId ? { targetFolderId: dest.folderId } : {}),
+                  };
+            return client.post<BookRequestSubmitResult>(
+              "/book-requests",
+              stripUndef(withDest),
+            );
+          });
           return ok({
             subscribedToExisting: res.subscribed,
             request: shapeRequest(res.request),
@@ -199,15 +211,22 @@ export function registerRequestTools(server: McpServer, ctx: ToolContext) {
             audiobookLibraryId,
             ...work
           } = i as any;
-          const body = {
-            ...stripUndef(work),
-            ebook: stripUndef({ targetLibraryId: ebookLibraryId }),
-            audiobook: stripUndef({ targetLibraryId: audiobookLibraryId }),
-          };
-          const res = await client.post<BookRequestPairSubmitResult>(
-            "/book-requests/pairs",
-            body,
-          );
+          const res = await submitWithDestination(client, (defaults) => {
+            const half = (lib: number | undefined, kind: "ebook" | "audiobook") => {
+              const d = defaults?.[kind];
+              return lib || !d?.libraryId
+                ? stripUndef({ targetLibraryId: lib })
+                : {
+                    targetLibraryId: d.libraryId,
+                    ...(d.folderId ? { targetFolderId: d.folderId } : {}),
+                  };
+            };
+            return client.post<BookRequestPairSubmitResult>("/book-requests/pairs", {
+              ...stripUndef(work),
+              ebook: half(ebookLibraryId, "ebook"),
+              audiobook: half(audiobookLibraryId, "audiobook"),
+            });
+          });
           return ok({
             ebook: {
               subscribedToExisting: res.ebook.subscribed,

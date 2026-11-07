@@ -100,6 +100,48 @@ await step("search_books", async () => {
   must(book1 && book4, "seed books not found");
   return `${d.items.length} items`;
 });
+// Re-runnable: a previous run may have moved the Fourth book to the second library.
+let lib2 = 0;
+let folder2 = 0;
+await step(
+  "reset: ensure the Fourth book is in the first library and a second library exists",
+  async () => {
+    const libs = await bo.get<any[]>("/libraries");
+    const first = libs.find((l) =>
+      l.folders?.some((f: any) => f.path === "/books/ebooks"),
+    );
+    must(first, "first library not found");
+    let second = libs.find((l) =>
+      l.folders?.some((f: any) => f.path === "/books/ebooks2"),
+    );
+    if (!second) {
+      const c = await bo.post<any>("/libraries", {
+        name: "Second Library",
+        icon: "📦",
+        folders: ["/books/ebooks2"],
+      });
+      second = (await bo.get<any[]>("/libraries")).find((l) => l.id === c.id);
+    }
+    lib2 = second.id;
+    folder2 = second.folders[0].id;
+    const cur = await bo.get<any>(`/books/${book4}`);
+    if (cur.libraryId !== first.id) {
+      await t("move_books", {
+        action: "execute",
+        bookIds: [book4],
+        targetLibraryId: first.id,
+        targetFolderId: first.folders[0].id,
+        collisionPolicy: "suggested",
+        confirm: true,
+      });
+    }
+    must(
+      (await bo.get<any>(`/books/${book4}`)).libraryId === first.id,
+      "could not restore the Fourth book",
+    );
+    return `lib1=${first.id} lib2=${lib2}`;
+  },
+);
 await step("get_book", async () => {
   const d = ok(await t("get_book", { bookId: book1 }), "get_book");
   must(d.files?.length >= 1, "no files");
@@ -283,6 +325,7 @@ await step("requests: create / get / list / summary / check_availability", async
       title: "Live Check Request A",
       authors: ["Testy McTestface"],
       mediaKind: "ebook",
+      targetLibraryId: lib1,
       seriesName: "Test Saga",
       seriesIndex: 3,
     }),
@@ -322,6 +365,7 @@ await step(
         action: "create",
         title: "Live Check Request A",
         mediaKind: "ebook",
+        targetLibraryId: lib1,
         authors: ["Testy McTestface"],
       }),
       "create dup",
@@ -330,12 +374,28 @@ await step(
   },
   true,
 );
+await step(
+  "requests: create with no destination fails with an actionable hint",
+  async () => {
+    const r = await t("requests", {
+      action: "create",
+      title: "Live Check No Destination",
+      mediaKind: "ebook",
+    });
+    const defaults = await bo.get<any>("/book-requests/default-destinations");
+    if (!r.isError) return `created OK (defaults configured: ${short(defaults, 100)})`;
+    must(/targetLibraryId/.test(r.text), `error has no hint: ${short(r.text)}`);
+    return short(r.text, 200);
+  },
+);
 await step("requests: create_pair", async () => {
   const c = ok(
     await t("requests", {
       action: "create_pair",
       title: "Live Check Pair",
       authors: ["Testy McTestface"],
+      ebookLibraryId: lib1,
+      audiobookLibraryId: lib1,
     }),
     "pair",
   );
@@ -567,16 +627,6 @@ await step("duplicates: scan -> status -> groups", async () => {
 
 // --------------------------------------------------------------------- move
 await step("move_books: preview -> gated execute -> verify", async () => {
-  const created = await bo.post<any>("/libraries", {
-    name: "Second Library",
-    icon: "📦",
-    folders: ["/books/ebooks2"],
-  });
-  const folders = (await bo.get<any[]>("/libraries")).find(
-    (l) => l.id === created.id,
-  )?.folders;
-  const lib2 = created.id;
-  const folder2 = folders[0].id;
   const args = { bookIds: [book4], targetLibraryId: lib2, targetFolderId: folder2 };
   const p = ok(await t("move_books", { action: "preview", ...args }), "preview");
   must(p.readyCount === 1, `readyCount ${p.readyCount}: ${short(p)}`);
