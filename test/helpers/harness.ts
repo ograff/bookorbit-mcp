@@ -28,9 +28,9 @@ export function mockBookOrbit(routes: Record<string, unknown | ((c: Call) => unk
     const route = routes[`${method} ${path}`];
     if (route === undefined)
       return json({ message: `no mock for ${method} ${path}` }, 404);
-    return json(
-      typeof route === "function" ? (route as (c: Call) => unknown)(call) : route,
-    );
+    const out =
+      typeof route === "function" ? (route as (c: Call) => unknown)(call) : route;
+    return out instanceof Response ? out : json(out);
   }) as typeof fetch;
   const client = new BookOrbitClient({
     baseUrl: "http://bo",

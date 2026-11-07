@@ -74,18 +74,7 @@ export class BookOrbitClient {
     path: string,
     opts: { body?: unknown; query?: Query } = {},
   ): Promise<T> {
-    const target = `${path}${buildQuery(opts.query)}`;
-    if (!this.accessToken) await this.authenticate();
-
-    let res = await this.send(method, target, opts.body);
-    if (res.status === 401) {
-      await this.authenticate();
-      res = await this.send(method, target, opts.body);
-    }
-    if (!res.ok) {
-      const { detail, errorCode } = describeErrorBody(await res.text(), res.statusText);
-      throw new BookOrbitError(method, path, res.status, detail, errorCode);
-    }
+    const res = await this.execute(method, path, opts, "application/json");
     if (res.status === 204) return undefined as T;
     const text = await res.text();
     if (!text) return undefined as T;
@@ -96,9 +85,95 @@ export class BookOrbitClient {
     }
   }
 
-  private send(method: string, target: string, body: unknown): Promise<Response> {
+  /**
+   * Read a server-sent-event endpoint, returning the parsed `data:` payloads of default
+   * (unnamed) events. Stops at end of stream, `maxEvents`, or `timeoutMs`, whichever is first.
+   * Named events (e.g. `provider-status`) are skipped.
+   */
+  async sse<T>(
+    path: string,
+    query?: Query,
+    opts: { timeoutMs?: number; maxEvents?: number } = {},
+  ): Promise<T[]> {
+    const timeoutMs = opts.timeoutMs ?? 25_000;
+    const maxEvents = opts.maxEvents ?? 200;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    const out: T[] = [];
+    try {
+      const res = await this.execute(
+        "GET",
+        path,
+        { query },
+        "text/event-stream",
+        ctrl.signal,
+      );
+      const reader = res.body?.getReader();
+      if (!reader) return out;
+      const decoder = new TextDecoder();
+      let buf = "";
+      try {
+        while (out.length < maxEvents) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          let idx: number;
+          while ((idx = buf.search(/\r?\n\r?\n/)) >= 0) {
+            const block = buf.slice(0, idx);
+            buf = buf.slice(idx).replace(/^\r?\n\r?\n/, "");
+            const parsed = parseSseBlock(block);
+            if (parsed && parsed.event === "message") {
+              try {
+                out.push(JSON.parse(parsed.data) as T);
+              } catch {
+                /* ignore malformed event */
+              }
+            }
+          }
+        }
+      } finally {
+        await reader.cancel().catch(() => undefined);
+      }
+    } catch (err) {
+      // A timeout/abort returns what arrived so far; real errors propagate.
+      if (!(err instanceof Error && err.name === "AbortError")) throw err;
+    } finally {
+      clearTimeout(timer);
+    }
+    return out;
+  }
+
+  private async execute(
+    method: string,
+    path: string,
+    opts: { body?: unknown; query?: Query },
+    accept: string,
+    signal?: AbortSignal,
+  ): Promise<Response> {
+    const target = `${path}${buildQuery(opts.query)}`;
+    if (!this.accessToken) await this.authenticate();
+
+    let res = await this.send(method, target, opts.body, accept, signal);
+    if (res.status === 401) {
+      await this.authenticate();
+      res = await this.send(method, target, opts.body, accept, signal);
+    }
+    if (!res.ok) {
+      const { detail, errorCode } = describeErrorBody(await res.text(), res.statusText);
+      throw new BookOrbitError(method, path, res.status, detail, errorCode);
+    }
+    return res;
+  }
+
+  private send(
+    method: string,
+    target: string,
+    body: unknown,
+    accept: string,
+    signal?: AbortSignal,
+  ): Promise<Response> {
     const headers: Record<string, string> = {
-      Accept: "application/json",
+      Accept: accept,
       Authorization: `Bearer ${this.accessToken}`,
     };
     if (body !== undefined) headers["Content-Type"] = "application/json";
@@ -106,6 +181,7 @@ export class BookOrbitClient {
       method,
       headers,
       body: body === undefined ? undefined : JSON.stringify(body),
+      signal,
     });
   }
 
@@ -161,4 +237,15 @@ export class BookOrbitClient {
       body: JSON.stringify(body),
     });
   }
+}
+
+function parseSseBlock(block: string): { event: string; data: string } | null {
+  let event = "message";
+  const data: string[] = [];
+  for (const line of block.split(/\r?\n/)) {
+    if (line.startsWith(":")) continue;
+    if (line.startsWith("event:")) event = line.slice(6).trim();
+    else if (line.startsWith("data:")) data.push(line.slice(5).replace(/^ /, ""));
+  }
+  return data.length ? { event, data: data.join("\n") } : null;
 }
