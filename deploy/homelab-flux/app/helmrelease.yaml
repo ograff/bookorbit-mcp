@@ -26,17 +26,20 @@ spec:
               PORT: &port "8080"
               # The BookOrbit Service (books ns), bypassing Cloudflare Access.
               BOOKORBIT_URL: http://bookorbit.books.svc.cluster.local:3000
-              # Defense in depth: the server re-verifies Cloudflare's signed
+              # Auth is Cloudflare Access (Service Auth) behind the `bookorbit-mcp-proxy` Worker,
+              # configured outside this repo. Defense in depth: the server re-verifies Cloudflare's signed
               # Cf-Access-Jwt-Assertion header (JWKS + AUD). NetworkPolicy
               # isn't enforced by flannel here, so this is also what stops
               # another pod from calling the Service directly.
               REQUIRE_CF_ACCESS: "true"
+              # Not secrets: the team's JWKS host and this Access app's Audience (AUD) tag.
+              CF_ACCESS_TEAM_DOMAIN: olivergraff.cloudflareaccess.com
+              CF_ACCESS_AUD: 46a417912b9ee9feeae3c556295236d75f6bf4b1a077cc99dda36f743722c16e
               # false = read-only deploy: every delete/reject/cancel/finalize
               # style action is refused even with confirm: true.
               ENABLE_DESTRUCTIVE: "true"
             envFrom:
-              # BOOKORBIT_USERNAME, BOOKORBIT_PASSWORD, CF_ACCESS_TEAM_DOMAIN,
-              # CF_ACCESS_AUD
+              # BOOKORBIT_USERNAME, BOOKORBIT_PASSWORD
               - secretRef:
                   name: bookorbit-mcp-secret
             probes:
