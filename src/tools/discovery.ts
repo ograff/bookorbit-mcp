@@ -14,9 +14,17 @@ const pq = (i: { page?: number; size?: number }) => ({
 });
 
 /** A compact book row, tolerant of both the card and the search-result shapes. */
-export function shapeBook(b: Partial<BookCard> & { libraryName?: string }) {
+export function shapeBook(
+  b: Partial<BookCard> & { libraryName?: string; formats?: (string | null)[] },
+) {
+  // Cards carry `files: [{format}]`; /books/search carries a top-level `formats: [..]`.
+  const fromFiles = (b.files ?? []).map((f) => f.format);
   const formats = [
-    ...new Set((b.files ?? []).map((f) => f.format?.toLowerCase()).filter(Boolean)),
+    ...new Set(
+      [...fromFiles, ...(b.formats ?? [])]
+        .map((f) => f?.toLowerCase())
+        .filter((f): f is string => Boolean(f)),
+    ),
   ];
   return {
     ...pick(b, [

@@ -56,3 +56,25 @@ test("browse rejects unknown fields for an action", async () => {
   const r = await call("browse", { action: "libraries", id: 3 });
   assert.equal(r.isError, true);
 });
+
+test("search_books keeps the top-level formats array real BookOrbit returns", async () => {
+  // Shape captured from a live BookOrbit 3.6.0 /books/search response.
+  const mock = mockBookOrbit({
+    "GET /books/search": [
+      {
+        id: 1,
+        title: "The First Test Voyage",
+        seriesName: "Test Saga",
+        authors: ["Testy McTestface"],
+        libraryId: 1,
+        libraryName: "Test Library",
+        updatedAt: "2026-11-07T06:36:36.062Z",
+        formats: ["epub"],
+      },
+    ],
+  });
+  const { call } = await connect(registerDiscoveryTools, mock.client);
+  const r = await call("search_books", { q: "Voyage" });
+  assert.deepEqual(r.data.items[0].formats, ["epub"]);
+  assert.deepEqual(r.data.items[0].authors, ["Testy McTestface"]);
+});
