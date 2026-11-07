@@ -2,12 +2,12 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { resolveSections } from "../src/epub-structure.js";
-import type { EpubInfo } from "../src/types.js";
+import { resolveSections } from "../../src/reading/epub-structure.js";
+import type { EpubInfo } from "../../src/reading/types.js";
 
 const info: EpubInfo = JSON.parse(
   readFileSync(
-    fileURLToPath(new URL("./fixtures/epub-info.json", import.meta.url)),
+    fileURLToPath(new URL("../fixtures/epub-info.json", import.meta.url)),
     "utf8",
   ),
 );

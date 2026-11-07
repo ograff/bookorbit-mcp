@@ -18,7 +18,7 @@
     "llm"
   ],
   "bin": {
-    "bookorbit-mcp": "dist/server.js"
+    "bookorbit-mcp": "dist/stdio.js"
   },
   "files": [
     "dist"
@@ -28,13 +28,13 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/server.js",
-    "dev": "node --import tsx src/server.ts",
+    "start": "node dist/stdio.js",
+    "dev": "node --import tsx src/stdio.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "node --import tsx --test test/*.test.ts",
+    "test": "node --import tsx --test \"test/**/*.test.ts\"",
     "setup:types": "bash scripts/setup-types.sh"
   },
   "dependencies": {

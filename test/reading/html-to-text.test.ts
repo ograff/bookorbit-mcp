@@ -2,10 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { htmlToText } from "../src/html-to-text.js";
+import { htmlToText } from "../../src/reading/html-to-text.js";
 
 const chapterXhtml = readFileSync(
-  fileURLToPath(new URL("./fixtures/chapter-bundle.xhtml", import.meta.url)),
+  fileURLToPath(new URL("../fixtures/chapter-bundle.xhtml", import.meta.url)),
   "utf8",
 );
 
