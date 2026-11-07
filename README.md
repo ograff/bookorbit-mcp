@@ -80,33 +80,48 @@ Create a dedicated user (don't reuse yours). Grant only what you want Claude to 
 A missing permission surfaces as a 403 naming the endpoint. A superuser also works but defeats the
 point of a scoped account. For a read-only deploy, grant none of the write permissions.
 
-## Cloudflare Access
+## Cloudflare Access and the Worker
 
-Authentication is a self-hosted Access application on the MCP hostname; the server additionally
-verifies Cloudflare's signed JWT (defense in depth, and it protects the Service from other pods,
+A claude.ai connector can send a plain `x-api-key` header, but it cannot complete an Access
+challenge or send Access service-token headers. So, like the cluster's `k8s-mcp`, the public face is
+a small **Cloudflare Worker** (`deploy/cloudflare-worker/worker.js`) in front of an
+**Access-protected origin**:
+
+```
+claude.ai ── x-api-key ──▶ Worker (bookorbit-mcp-proxy) ── adds CF-Access-Client-* ──▶
+  Access (Service Auth) ──▶ tunnel ──▶ bookorbit-mcp pod  (verifies the Access JWT again)
+```
+
+The Worker only serves `/mcp`, compares the key in constant time, fails closed if misconfigured,
+and strips `x-api-key` before forwarding. The server still verifies Cloudflare's signed
+`Cf-Access-Jwt-Assertion` itself (defense in depth, and it protects the Service from other pods,
 since flannel does not enforce NetworkPolicy).
 
-1. Tunnel/route: publish `bookorbit-mcp.<domain>` to the cluster (in this homelab: an `HTTPRoute`
-   on `envoy-external`, see `deploy/homelab-flux`).
-2. Zero Trust → Access → Applications → **Add application → Self-hosted** for that hostname, with a
-   policy allowing your identity. Give it its own app so it is not under a wildcard policy.
-3. Pick one auth mode:
-   - **Managed OAuth** (what this was designed for): enable _Managed OAuth_ on the app with dynamic
-     client registration, so claude.ai registers itself. Check Cloudflare's current docs for the
-     exact steps; the feature is still evolving.
-   - **Service Auth + header token** (what `k8s-mcp` uses in this cluster): a Service Auth policy
-     with `read_service_tokens_from_header: x-auth-token`, and the connector sends the token JSON in
-     that header. The JWT check works the same with either mode.
-4. Copy the app's **Application Audience (AUD) tag** into `CF_ACCESS_AUD`, and your team name into
-   `CF_ACCESS_TEAM_DOMAIN`.
-5. Verify: `curl https://bookorbit-mcp.<domain>/.well-known/oauth-authorization-server` returns the
-   issuer and endpoints (Managed OAuth), and an unauthenticated `POST /mcp` is refused.
-6. claude.ai → Settings → Connectors → **Add custom connector** →
-   `https://bookorbit-mcp.<domain>/mcp`.
+1. Route: publish `bookorbit-mcp.<domain>` to the cluster (in this homelab, an `HTTPRoute` on
+   `envoy-external`, see `deploy/homelab-flux`).
+2. Zero Trust: create a **service token** `bookorbit-mcp`, then a **self-hosted Access app** for the
+   hostname with a **Service Auth** policy that includes that token. (Do not use Bypass.) Copy the
+   app's **AUD tag** and your team name into the cluster secret (`CF_ACCESS_AUD`,
+   `CF_ACCESS_TEAM_DOMAIN`). `read_service_tokens_from_header` is not needed: the Worker sends the
+   standard `CF-Access-Client-Id` / `CF-Access-Client-Secret` headers (and the API now only accepts
+   `Authorization` for that setting anyway).
+3. Create the Worker `bookorbit-mcp-proxy` from `deploy/cloudflare-worker/worker.js`. Secrets:
+   `PROXY_KEY` (generate with `openssl rand -hex 32`), `ACCESS_CLIENT_ID`, `ACCESS_CLIENT_SECRET`;
+   variable `ORIGIN` = `https://bookorbit-mcp.<domain>`. Serve it from a `workers.dev` hostname (or
+   another zone), not the origin's own zone.
+4. Verify the origin: `curl -X POST https://bookorbit-mcp.<domain>/mcp` with the
+   `CF-Access-Client-Id` / `CF-Access-Client-Secret` headers returns the tool list; without them it
+   is refused by Access.
+5. Verify the Worker: the same request to `https://<worker>/mcp` with `x-api-key: <PROXY_KEY>`.
+6. claude.ai → Settings → Connectors → Add custom connector → `https://<worker>/mcp`, sending
+   `x-api-key`.
+
+The `PROXY_KEY` is the only gate on a server that can delete books and move files (destructive
+actions still need `confirm: true`). Treat it like a password and rotate it if it leaks.
 
 If requests are rejected with `unauthorized`, the pod log says why (`auth rejected …: <reason>`).
-First thing to confirm for a new Access mode: that Access forwards `Cf-Access-Jwt-Assertion` to the
-origin for that mode.
+First thing to check for a new Access setup: that Access forwards `Cf-Access-Jwt-Assertion` to the
+origin for service-token requests.
 
 ## Deploying
 
