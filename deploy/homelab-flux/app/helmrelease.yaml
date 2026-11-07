@@ -21,7 +21,7 @@ spec:
           app:
             image:
               repository: ghcr.io/ograff/bookorbit-mcp
-              tag: sha-REPLACE_ME
+              tag: sha-c31e4ca
             env:
               PORT: &port "8080"
               # The BookOrbit Service (books ns), bypassing Cloudflare Access.

@@ -4,5 +4,7 @@ kind: Kustomization
 resources:
   - ./ocirepository.yaml
   - ./helmrelease.yaml
-  - ./secret.sops.yaml
+  # TODO(before the pod can start): create secret.sops.yaml from secret.example.yaml,
+  # encrypt it with sops, and add `- ./secret.sops.yaml` here. Until then the pod sits in
+  # CreateContainerConfigError; nothing else is affected.
   - ./httproute.yaml
