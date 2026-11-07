@@ -1,0 +1,10 @@
+bookorbit-mcp
+Copyright (C) 2026 Oliver Graff. Licensed under AGPL-3.0-only (see LICENSE).
+
+This project builds against @bookorbit/types from BookOrbit
+(https://github.com/bookorbit/bookorbit), AGPL-3.0-only, Copyright (C) 2025-2026 neon and
+BookOrbit contributors, vendored as a pinned git submodule at vendor/bookorbit.
+BookOrbit's ADDITIONAL_TERMS.md applies to that material.
+
+Portions of this project derive from joshstrange/bookorbit-mcp, Copyright (c) Josh Strange,
+released under the MIT License (see LICENSE-MIT-upstream).
