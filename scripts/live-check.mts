@@ -307,8 +307,12 @@ let lib1 = 0;
 let folder1 = 0;
 await step("manage_library: list / stats / scan_history", async () => {
   const l = ok(await t("manage_library", { action: "list" }), "list");
-  lib1 = l.items[0].id;
-  folder1 = l.items[0].folders[0].id;
+  const first = l.items.find((x: any) =>
+    x.folders.some((f: any) => f.path === "/books/ebooks"),
+  );
+  must(first, "first library (folder /books/ebooks) not listed");
+  lib1 = first.id;
+  folder1 = first.folders.find((f: any) => f.path === "/books/ebooks").id;
   must(folder1, "no folder ids exposed");
   ok(await t("manage_library", { action: "stats", id: lib1 }), "stats");
   ok(await t("manage_library", { action: "scan_history", id: lib1 }), "scan_history");
@@ -419,24 +423,32 @@ await step(
   },
   true,
 );
-await step("requests_admin: reject is gated, then rejects", async () => {
-  const dry = ok(
-    await t("requests_admin", { action: "reject", id: reqB, decisionNote: "live check" }),
-    "dry",
-  );
-  must(dry.dryRun === true, "reject without confirm executed");
-  const r = ok(
-    await t("requests_admin", {
+await step(
+  "requests_admin: reject is gated; BookOrbit refuses a non-pending request readably",
+  async () => {
+    const dry = ok(
+      await t("requests_admin", {
+        action: "reject",
+        id: reqB,
+        decisionNote: "live check",
+      }),
+      "dry",
+    );
+    must(dry.dryRun === true, "reject without confirm executed");
+    // Requests an admin creates are auto-approved, so BookOrbit must refuse (and say why).
+    const r = await t("requests_admin", {
       action: "reject",
       id: reqB,
       decisionNote: "live check",
       confirm: true,
-    }),
-    "reject",
-  );
-  must(r.status === "rejected", `status ${r.status}`);
-  return "rejected";
-});
+    });
+    must(
+      r.isError && /BOOK_REQUEST_NOT_PENDING|Only a pending request/.test(r.text),
+      `expected a readable not-pending refusal, got ${short(r.text)}`,
+    );
+    return short(r.text, 160);
+  },
+);
 await step("requests: cancel is gated, then cancels", async () => {
   const dry = ok(await t("requests", { action: "cancel", id: reqA }), "dry");
   must(dry.dryRun === true, "cancel without confirm executed");
@@ -449,6 +461,12 @@ await step("requests: cancel is gated, then cancels", async () => {
 await step("requests_admin: delete is gated, then deletes", async () => {
   const dry = ok(await t("requests_admin", { action: "delete", id: reqB }), "dry");
   must(dry.dryRun === true, "delete without confirm executed");
+  const early = await t("requests_admin", { action: "delete", id: reqB, confirm: true });
+  must(
+    early.isError && /cancel it before deleting/.test(early.text),
+    `expected a readable refusal to delete in-progress work, got ${short(early.text)}`,
+  );
+  ok(await t("requests", { action: "cancel", id: reqB, confirm: true }), "cancel first");
   ok(await t("requests_admin", { action: "delete", id: reqB, confirm: true }), "delete");
   const g = await t("requests", { action: "get", id: reqB });
   must(g.isError, "request still readable after delete");
